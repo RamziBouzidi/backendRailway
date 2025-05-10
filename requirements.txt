@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+passlib
+bcrypt
+python-jose
+PyJWT
+python-multipart
+aiosmtplib
+alembic
+email-validator
+python-dotenv
+mysql-connector-python
+asyncpg
+psycopg2-binary
+numpy
+websockets
