@@ -39,7 +39,7 @@ HX711 scale2;
 
 // --- State variables ---
 bool device_on = false;
-float wind_speed = 0.0;
+int wind_speed = 0;
 
 #define FIRMWARE_VERSION "1.0.0" // Only main ESP32 uses OTA and ArduinoJson
 #define DEVICE_ROLE "main_esp"    // Used to identify this device to backend
@@ -54,8 +54,8 @@ void handleSettingsUpdate(JsonObject& obj) {
   if (obj.containsKey("wind_speed")) {
     wind_speed = obj["wind_speed"];
     Serial.print("Wind Speed: "); Serial.println(wind_speed);
-    // Map wind_speed (0.0-1.0) to PWM (0-255)
-    int duty = (int)(wind_speed * 255.0);
+    // Use wind_speed directly as PWM (0-255)
+    int duty = wind_speed;
     ledcWrite(pwmChannel, device_on ? duty : 0);
   }
   // If device is off, turn off fan

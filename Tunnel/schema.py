@@ -82,7 +82,7 @@ class TestCasesWithCarModel(BaseModel):
     Test_id: int
     Drag_Force: int
     Down_Force: int
-    Wind_Speed: int
+    Wind_Speed: float
     created_at: datetime
     # Car model fields
     car_name: str
@@ -114,14 +114,14 @@ class TestData(BaseModel):
     """Data sent from microcontroller for test results"""
     drag_force: int
     down_force: int
-    wind_speed: int
+    wind_speed: float
     model_id: int
     user_id: int
 
 
 class SpeedUpdate(BaseModel):
     """Used to update the wind speed"""
-    wind_speed: int
+    wind_speed: float
 
 
 class DeviceControl(BaseModel):
@@ -139,7 +139,7 @@ class CurrentTestSettingsResponse(BaseModel):
     model_id: int
     user_id: int
     device_on: bool
-    wind_speed: int
+    wind_speed: float
     last_updated: Optional[datetime] = None
     car_name: Optional[str] = None
     
@@ -156,7 +156,7 @@ class TestDataResponse(BaseModel):
     """Response with live test data"""
     drag_force: float
     down_force: float
-    wind_speed: int
+    wind_speed: float
     model_id: int
     user_id: int
     timestamp: datetime
