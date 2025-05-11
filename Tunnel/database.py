@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Async PostgreSQL configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:nourkalb1@localhost:5432/wind_tunnel_db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:pmgJEqXiDwOeMaHOuehkcqYXCAevXlfJ@postgres.railway.internal:5432/wind_tunnel_db")
 
 # Make sure to use asyncpg for async operations
 if DATABASE_URL.startswith("postgresql://"):

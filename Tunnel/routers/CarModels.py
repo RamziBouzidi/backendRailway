@@ -43,20 +43,3 @@ async def get_car_by_name(
 @router.delete("/deleteCar/{id}", status_code=status.HTTP_200_OK)
 async def delete(id: int, db: AsyncSession = Depends(get_db), current_user: schema.TokenData = Depends(get_current_user)):
     return await carmodels.delete(id, db)
-
-@router.put("/updateCar/{id}", status_code=status.HTTP_200_OK, response_model=schema.carmodels)
-async def update_car(
-    id: int, 
-    request: schema.CarModelCreate, 
-    db: AsyncSession = Depends(get_db), 
-    current_user: schema.TokenData = Depends(get_current_user)
-):
-    """
-    Update a car model by its ID
-    
-    Request body:
-    - **car_name**: Name of the car model
-    - **Manufacturer**: Manufacturer of the car model
-    - **Type_car**: Type of the car model
-    """
-    return await carmodels.update_Car(id, request, db)
