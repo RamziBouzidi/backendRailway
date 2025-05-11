@@ -330,26 +330,13 @@ async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Dep
     await websocket.accept()
     microcontroller_ws = websocket
 
-    # Send dependencies.txt as JSON if it exists
-    dependencies_path = pathlib.Path("dependencies.txt")
-    if dependencies_path.exists():
-        try:
-            with dependencies_path.open("r", encoding="utf-8") as f:
-                content = f.read()
-                # Try to parse as JSON, else send as plain text
-                try:
-                    deps_json = json.loads(content)
-                except Exception:
-                    deps_json = {"raw": content}
-            await websocket.send_json({
-                "type": "updateMicro",
-                "dependencies": deps_json
-            })
-            print("Sent updateMicro message to microcontroller")
-        except Exception as e:
-            print(f"Error sending dependencies.txt: {e}")
-    else:
-        print("No dependencies.txt file found to send to microcontroller")
+    # --- OTA UPDATE: Always send OTA update message with hardcoded URL ---
+    ota_url = "http://your-server.com/firmware.bin" 
+    await websocket.send_json({
+        "type": "updateMicro",
+        "ota_url": ota_url
+    })
+    print(f"Sent OTA updateMicro message to microcontroller with ota_url: {ota_url}")
 
     # Update connection status
     memory_settings["microcontroller_connected"] = True
@@ -365,22 +352,18 @@ async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Dep
             "wind_speed": memory_settings["wind_speed"]
         })
         
-        # Keep connection alive and process messages
+        # Main receive loop: process force data and broadcast to clients
         while True:
-            # Receive data from microcontroller
             data = await websocket.receive_json()
-            
-            # Update last data timestamp
             memory_settings["last_microcontroller_data"] = datetime.now().isoformat()
-            
-            # Process different types of data
+
+            # Expect drag_force and down_force from microcontroller
             if "drag_force" in data and "down_force" in data:
                 try:
-                    # Update force values in memory
                     memory_settings["drag_force"] = data["drag_force"]
                     memory_settings["down_force"] = data["down_force"]
-                    
-                    # Create consistent settings format with the new force data for broadcasting
+
+                    # Broadcast new force values to all clients
                     settings_message = {
                         "type": "settings",
                         "model_id": memory_settings["model_id"],
@@ -393,40 +376,31 @@ async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Dep
                         "down_force": data["down_force"],
                         "microcontroller_connected": True
                     }
-                    
-                    # Send the settings update to all connected clients
                     await broadcast_to_all(settings_message)
-                    
-                    # Check for anomalies in current data and notify clients if found
+
+                    # Optionally: check for anomalies and broadcast alerts
                     anomaly_message = await check_memory_for_anomalies()
                     if anomaly_message:
-                        # Send anomaly notification to all clients
                         await broadcast_to_all(anomaly_message)
-                
                 except Exception as e:
                     error_message = f"Error processing test data: {str(e)}"
                     print(error_message)
-                    # Inform clients about the error
                     await broadcast_to_all({
                         "type": "error",
                         "message": error_message
                     })
-    
+            # Optionally: handle other message types from microcontroller here
+
     except WebSocketDisconnect:
         microcontroller_ws = None
-        # Update connection status
         memory_settings["microcontroller_connected"] = False
-        
-        # Notify clients about the disconnection
         await broadcast_to_all({
             "type": "microcontroller_status",
             "connected": False
         })
-                
     except Exception as e:
         print(f"Error in microcontroller WebSocket: {str(e)}")
         microcontroller_ws = None
-        # Update connection status
         memory_settings["microcontroller_connected"] = False
 
 # WebSocket endpoint for clients (users)

@@ -11,6 +11,22 @@ async def get_all(db: AsyncSession, response_model=List[schema.carmodels]):
     return result.scalars().all()
 
 
+async def update_Car(id: int, request: schema.CarModelCreate, db: AsyncSession):
+    result = await db.execute(select(models.CarModels).filter(models.CarModels.id == id))
+    car = result.scalars().first()
+    if not car:
+        raise HTTPException(status_code=404, detail=f"Car with id {id} is not available")
+    
+    # Correctly update the fields
+    car.car_name = request.car_name
+    car.Manufacturer = request.Manufacturer
+    car.Type_car = request.Type_car
+
+    await db.commit()
+    await db.refresh(car)
+    return car
+
+
 async def post_Car(request: schema.CarModelCreate, db: AsyncSession):
     # Create a new car model without requiring an ID
     new_car = models.CarModels(
