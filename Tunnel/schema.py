@@ -82,7 +82,7 @@ class TestCasesWithCarModel(BaseModel):
     Test_id: int
     Drag_Force: int
     Down_Force: int
-    Wind_Speed: float
+    Wind_Speed: int
     created_at: datetime
     # Car model fields
     car_name: str
@@ -139,7 +139,7 @@ class CurrentTestSettingsResponse(BaseModel):
     model_id: int
     user_id: int
     device_on: bool
-    wind_speed: float
+    wind_speed: int
     last_updated: Optional[datetime] = None
     car_name: Optional[str] = None
     
@@ -156,7 +156,7 @@ class TestDataResponse(BaseModel):
     """Response with live test data"""
     drag_force: float
     down_force: float
-    wind_speed: float
+    wind_speed: int
     model_id: int
     user_id: int
     timestamp: datetime

@@ -27,7 +27,7 @@ class testCases(Base):
     Drag_Force = Column(Float)
     User_Id = Column(Integer, ForeignKey("Users.id"))
     Owner = relationship("User", back_populates="testCasesS")
-    Wind_Speed = Column(Float)
+    Wind_Speed = Column(Integer)
     Model_id = Column(Integer, ForeignKey("CarModels.id"))
     CarModel = relationship("CarModels", back_populates="testCasesS")
     created_at = Column(DateTime, default=datetime.now)
