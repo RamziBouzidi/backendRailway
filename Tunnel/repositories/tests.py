@@ -214,3 +214,14 @@ async def get_tests_by_model_with_car_info(model_id: int, limit: int = 50, db: A
         tests_with_model.append(test_with_model)
     
     return tests_with_model
+
+
+async def get_total_test_count_by_user_id(user_id: int, db: AsyncSession) -> int:
+    """
+    Get the total number of test cases for a given user ID.
+    """
+    result = await db.execute(
+        select(models.testCases).filter(models.testCases.User_Id == user_id)
+    )
+    tests = result.scalars().all()
+    return len(tests)

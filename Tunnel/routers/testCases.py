@@ -301,3 +301,16 @@ async def analyze_speed_patterns_filtered(
             status_code=500, 
             detail=f"Error processing filtered analysis: {str(e)}"
         )
+
+@router.get("/getTotalTestCountByUserId/{user_id}", status_code=status.HTTP_200_OK)
+async def get_total_test_count_by_user_id(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: schema.TokenData = Depends(get_current_user)
+):
+    """
+    Get the total number of test cases for a given user ID
+    """
+    from ..repositories import tests as tests_repo
+    total_count = await tests_repo.get_total_test_count_by_user_id(user_id, db)
+    return {"user_id": user_id, "total_test_count": total_count}

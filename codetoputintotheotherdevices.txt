@@ -19,7 +19,7 @@ const char* password = "YOUR_WIFI_PASSWORD";
 
 // --- WebSocket server config ---
 // Replace with your server's IP or domain and port
-const char* ws_host = "192.168.1.106"; // or ngrok/railway domain
+const char* ws_host = "backendrailway-production-35ad.up.railway.app";
 const uint16_t ws_port = 8000;
 const char* ws_path = "/ws/microcontroller";
 
