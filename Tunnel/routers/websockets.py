@@ -319,39 +319,42 @@ async def update_memory_with_car_details(model_id: int, db: AsyncSession) -> boo
 @router.websocket("/ws/microcontroller")
 async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Depends(database.get_db)):
     global microcontroller_ws
-    
+    LATEST_FIRMWARE_VERSION = "1.0.0"  # Update this when you release new firmware
+
     # Initialize memory settings from database if needed
     if memory_settings["model_id"] is None:
         await initialize_memory_settings(db)
-    
     # Start background tasks if not already running
     await start_background_tasks()
-    
     await websocket.accept()
     microcontroller_ws = websocket
 
-    # --- OTA UPDATE: Always send OTA update message with hardcoded URL ---
-    ota_url = "http://your-server.com/firmware.bin" 
-    await websocket.send_json({
-        "type": "updateMicro",
-        "ota_url": ota_url
-    })
-    print(f"Sent OTA updateMicro message to microcontroller with ota_url: {ota_url}")
+    # --- Wait for version_info from microcontroller ---
+    try:
+        version_info = await websocket.receive_json()
+        if version_info.get("type") == "version_info":
+            device_version = version_info.get("firmware_version", "0.0.0")
+            # Only send OTA if version is different
+            if device_version != LATEST_FIRMWARE_VERSION:
+                ota_url = "http://your-server.com/firmware.bin"
+                await websocket.send_json({
+                    "type": "updateMicro",
+                    "ota_url": ota_url
+                })
+                print(f"Sent OTA updateMicro message to microcontroller with ota_url: {ota_url}")
+            else:
+                print(f"Microcontroller firmware up-to-date: {device_version}")
+        else:
+            print("First message from microcontroller was not version_info. Skipping OTA check.")
+    except Exception as e:
+        print(f"Error receiving version_info from microcontroller: {str(e)}")
+        return
 
     # Update connection status
     memory_settings["microcontroller_connected"] = True
     memory_settings["last_microcontroller_data"] = datetime.now().isoformat()
-    
+
     try:
-        # Send current settings to the microcontroller from memory
-        await websocket.send_json({
-            "type": "settings_update",
-            "model_id": memory_settings["model_id"],
-            "user_id": memory_settings["user_id"],
-            "device_on": memory_settings["device_on"],
-            "wind_speed": memory_settings["wind_speed"]
-        })
-        
         # Main receive loop: process force data and broadcast to clients
         while True:
             data = await websocket.receive_json()
@@ -389,7 +392,6 @@ async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Dep
                         "type": "error",
                         "message": error_message
                     })
-            # Optionally: handle other message types from microcontroller here
 
     except WebSocketDisconnect:
         microcontroller_ws = None

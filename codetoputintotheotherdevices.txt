@@ -67,13 +67,6 @@ void handleSettingsUpdate(JsonObject& obj) {
 void handleUpdateMicro(JsonObject& obj) {
   Serial.println("Received updateMicro message:");
   serializeJsonPretty(obj, Serial);
-  // Handle dependency updates (just acknowledge, don't store)
-  if (obj.containsKey("dependencies")) {
-    Serial.println("Received dependencies update (ignored for microcontroller logic)");
-    // Send acknowledgment back to server
-    webSocket.sendTXT(String("{\"type\":\"updateMicro_ack\",\"status\":\"received\"}"));
-    Serial.println("Sent updateMicro_ack");
-  }
   // OTA update trigger
   if (obj.containsKey("ota_url")) {
     String otaUrl = obj["ota_url"].as<String>();
