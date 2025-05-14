@@ -399,6 +399,10 @@ async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Dep
                         "microcontroller_connected": memory_settings["microcontroller_connected"]
                     }
                     await broadcast_to_all(settings_message)
+                # --- ALERT CLIENTS IF ANOMALY DETECTED ---
+                anomaly_message = await check_memory_for_anomalies()
+                if anomaly_message:
+                    await broadcast_to_all(anomaly_message)
             # Handle settings_update from client (should only be sent to fan_micro)
             if data.get("type") == "settings_update":
                 # Only fan_micro should receive this
