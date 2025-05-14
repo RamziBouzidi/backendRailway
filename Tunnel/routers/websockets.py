@@ -19,7 +19,6 @@ load_dotenv()
 router = APIRouter(tags=['WebSockets'])
 
 # Store active websocket connections
-microcontroller_ws: Optional[WebSocket] = None
 client_connections: List[WebSocket] = []
 
 # In-memory storage for settings and test data
@@ -389,13 +388,17 @@ async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Dep
                     }
                     await broadcast_to_all(settings_message)
                 elif device_role == "force_micro":
-                    # Only broadcast force_micro data to clients (do NOT forward to fan_micro)
-                    await broadcast_to_all({
-                        "type": "force_micro_data",
-                        "drag_force": drag,
-                        "down_force": down,
-                        "timestamp": datetime.now().isoformat()
-                    })
+                    # Update memory_settings with force data
+                    memory_settings["drag_force"] = drag
+                    memory_settings["down_force"] = down
+                    memory_settings["last_microcontroller_data"] = datetime.now().isoformat()
+                    # Broadcast main settings message to clients (so UI gets force values)
+                    settings_message = {
+                        "type": "settings",
+                        **memory_settings,
+                        "microcontroller_connected": memory_settings["microcontroller_connected"]
+                    }
+                    await broadcast_to_all(settings_message)
             # Handle settings_update from client (should only be sent to fan_micro)
             if data.get("type") == "settings_update":
                 # Only fan_micro should receive this
@@ -713,17 +716,13 @@ async def client_websocket(
                         await broadcast_to_all(settings_message)
                         
                         # Also send settings update to microcontroller (without force data)
-                        if microcontroller_ws:
-                            try:
-                                await microcontroller_ws.send_json({
-                                    "type": "settings_update",
-                                    "model_id": memory_settings["model_id"],
-                                    "user_id": memory_settings["user_id"],
-                                    "device_on": memory_settings["device_on"],
-                                    "wind_speed": memory_settings["wind_speed"]
-                                })
-                            except Exception as e:
-                                print(f"Error sending settings to microcontroller: {str(e)}")
+                        await send_to_micro("fan_micro", {
+                            "type": "settings_update",
+                            "model_id": memory_settings["model_id"],
+                            "user_id": memory_settings["user_id"],
+                            "device_on": memory_settings["device_on"],
+                            "wind_speed": memory_settings["wind_speed"]
+                        })
                     
                     else:
                         await websocket.send_json({
