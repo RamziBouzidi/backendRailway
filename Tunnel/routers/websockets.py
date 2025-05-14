@@ -221,6 +221,15 @@ async def broadcast_to_all(message):
         if client in client_connections:
             client_connections.remove(client)
 
+# Helper: send message to a specific microcontroller by device_role
+async def send_to_micro(device_role, message):
+    ws = getattr(router, 'micro_ws_by_role', {}).get(device_role)
+    if ws:
+        try:
+            await ws.send_json(message)
+        except Exception as e:
+            print(f"Error sending to {device_role}: {e}")
+
 # Load settings from database to memory on startup
 async def initialize_memory_settings(db: AsyncSession):
     """Initialize memory settings from database"""
@@ -349,6 +358,9 @@ async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Dep
                 print(f"Sent OTA updateMicro to {device_role} with ota_url: {ota_url}")
             else:
                 print(f"{device_role} firmware up-to-date: {device_version}")
+            # On connect, update connection status
+            memory_settings["microcontroller_connected"] = True
+            await broadcast_to_all({"type": "microcontroller_status", "device_role": device_role, "connected": True})
         else:
             print("First message from microcontroller was not version_info. Skipping OTA check.")
     except Exception as e:
@@ -359,12 +371,11 @@ async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Dep
     try:
         while True:
             data = await websocket.receive_json()
+            device_role = version_info.get("device_role")
             # Handle force_data from either device
             if data.get("type") == "force_data":
                 drag = data.get("drag_force")
                 down = data.get("down_force")
-                device_role = version_info.get("device_role")
-                # Store in memory_settings for fan_micro, or broadcast for force_micro
                 if device_role == "fan_micro":
                     memory_settings["drag_force"] = drag
                     memory_settings["down_force"] = down
@@ -378,13 +389,26 @@ async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Dep
                     }
                     await broadcast_to_all(settings_message)
                 elif device_role == "force_micro":
-                    # Optionally: broadcast force_micro data separately
+                    # Only broadcast force_micro data to clients (do NOT forward to fan_micro)
                     await broadcast_to_all({
                         "type": "force_micro_data",
                         "drag_force": drag,
                         "down_force": down,
                         "timestamp": datetime.now().isoformat()
                     })
+            # Handle settings_update from client (should only be sent to fan_micro)
+            if data.get("type") == "settings_update":
+                # Only fan_micro should receive this
+                await send_to_micro("fan_micro", data)
+                # Update memory_settings and broadcast to clients
+                if "device_on" in data:
+                    memory_settings["device_on"] = data["device_on"]
+                if "wind_speed" in data:
+                    memory_settings["wind_speed"] = data["wind_speed"]
+                await broadcast_to_all({
+                    "type": "settings",
+                    **memory_settings
+                })
             # Optionally handle ota_ack, etc.
     except WebSocketDisconnect:
         # Remove from active connections
@@ -393,6 +417,8 @@ async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Dep
             del router.micro_ws_by_role[device_role]
         if device_role in router.micro_version_by_role:
             del router.micro_version_by_role[device_role]
+        memory_settings["microcontroller_connected"] = False
+        await broadcast_to_all({"type": "microcontroller_status", "device_role": device_role, "connected": False})
         print(f"{device_role} disconnected from /ws/microcontroller")
     except Exception as e:
         print(f"Error in microcontroller WebSocket: {str(e)}")
