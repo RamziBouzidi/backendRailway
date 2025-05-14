@@ -315,95 +315,87 @@ async def update_memory_with_car_details(model_id: int, db: AsyncSession) -> boo
         print(f"Error updating memory with car details: {str(e)}")
         return False
 
-# WebSocket endpoint for microcontroller - SINGLE CONNECTION POINT
+# WebSocket endpoint for microcontroller - SUPPORTS MULTIPLE DEVICES
 @router.websocket("/ws/microcontroller")
 async def microcontroller_websocket(websocket: WebSocket, db: AsyncSession = Depends(database.get_db)):
-    global microcontroller_ws
-    LATEST_FIRMWARE_VERSION = "1.0.0"  # Update this when you release new firmware
-
-    # Initialize memory settings from database if needed
-    if memory_settings["model_id"] is None:
-        await initialize_memory_settings(db)
-    # Start background tasks if not already running
-    await start_background_tasks()
+    # Track all microcontrollers by device_role
+    if not hasattr(router, "micro_ws_by_role"):
+        router.micro_ws_by_role = {}
+        router.micro_version_by_role = {}
+    # Load latest firmware from environment or config file if available
+    LATEST_FIRMWARE = {
+        "fan_micro": os.getenv("FAN_MICRO_FW", "1.0.0"),
+        "force_micro": os.getenv("FORCE_MICRO_FW", "1.0.0")
+    }
+    OTA_URLS = {
+        "fan_micro": os.getenv("FAN_MICRO_OTA_URL", "https://github.com/youruser/yourrepo/releases/download/v1.0.0/fan_micro.bin"),
+        "force_micro": os.getenv("FORCE_MICRO_OTA_URL", "https://github.com/youruser/yourrepo/releases/download/v1.0.0/force_micro.bin")
+    }
     await websocket.accept()
-    microcontroller_ws = websocket
-
-    # --- Wait for version_info from microcontroller ---
     try:
         version_info = await websocket.receive_json()
         if version_info.get("type") == "version_info":
+            device_role = version_info.get("device_role")
             device_version = version_info.get("firmware_version", "0.0.0")
-            # Only send OTA if version is different
-            if device_version != LATEST_FIRMWARE_VERSION:
-                ota_url = "http://your-server.com/firmware.bin"
+            router.micro_ws_by_role[device_role] = websocket
+            router.micro_version_by_role[device_role] = device_version
+            # Always check server-side firmware version and trigger OTA if needed
+            if device_role in LATEST_FIRMWARE and device_version != LATEST_FIRMWARE[device_role]:
+                ota_url = OTA_URLS[device_role]
                 await websocket.send_json({
                     "type": "updateMicro",
                     "ota_url": ota_url
                 })
-                print(f"Sent OTA updateMicro message to microcontroller with ota_url: {ota_url}")
+                print(f"Sent OTA updateMicro to {device_role} with ota_url: {ota_url}")
             else:
-                print(f"Microcontroller firmware up-to-date: {device_version}")
+                print(f"{device_role} firmware up-to-date: {device_version}")
         else:
             print("First message from microcontroller was not version_info. Skipping OTA check.")
     except Exception as e:
         print(f"Error receiving version_info from microcontroller: {str(e)}")
         return
 
-    # Update connection status
-    memory_settings["microcontroller_connected"] = True
-    memory_settings["last_microcontroller_data"] = datetime.now().isoformat()
-
+    # Main receive loop: process force data and broadcast to clients
     try:
-        # Main receive loop: process force data and broadcast to clients
         while True:
             data = await websocket.receive_json()
-            memory_settings["last_microcontroller_data"] = datetime.now().isoformat()
-
-            # Expect drag_force and down_force from microcontroller
-            if "drag_force" in data and "down_force" in data:
-                try:
-                    memory_settings["drag_force"] = data["drag_force"]
-                    memory_settings["down_force"] = data["down_force"]
-
-                    # Broadcast new force values to all clients
+            # Handle force_data from either device
+            if data.get("type") == "force_data":
+                drag = data.get("drag_force")
+                down = data.get("down_force")
+                device_role = version_info.get("device_role")
+                # Store in memory_settings for fan_micro, or broadcast for force_micro
+                if device_role == "fan_micro":
+                    memory_settings["drag_force"] = drag
+                    memory_settings["down_force"] = down
+                    memory_settings["last_microcontroller_data"] = datetime.now().isoformat()
+                    memory_settings["microcontroller_connected"] = True
+                    # Broadcast to all clients
                     settings_message = {
                         "type": "settings",
-                        "model_id": memory_settings["model_id"],
-                        "user_id": memory_settings["user_id"],
-                        "device_on": memory_settings["device_on"],
-                        "wind_speed": memory_settings["wind_speed"],
-                        "car_name": memory_settings["car_name"],
-                        "last_updated": memory_settings["last_updated"],
-                        "drag_force": data["drag_force"],
-                        "down_force": data["down_force"],
+                        **memory_settings,
                         "microcontroller_connected": True
                     }
                     await broadcast_to_all(settings_message)
-
-                    # Optionally: check for anomalies and broadcast alerts
-                    anomaly_message = await check_memory_for_anomalies()
-                    if anomaly_message:
-                        await broadcast_to_all(anomaly_message)
-                except Exception as e:
-                    error_message = f"Error processing test data: {str(e)}"
-                    print(error_message)
+                elif device_role == "force_micro":
+                    # Optionally: broadcast force_micro data separately
                     await broadcast_to_all({
-                        "type": "error",
-                        "message": error_message
+                        "type": "force_micro_data",
+                        "drag_force": drag,
+                        "down_force": down,
+                        "timestamp": datetime.now().isoformat()
                     })
-
+            # Optionally handle ota_ack, etc.
     except WebSocketDisconnect:
-        microcontroller_ws = None
-        memory_settings["microcontroller_connected"] = False
-        await broadcast_to_all({
-            "type": "microcontroller_status",
-            "connected": False
-        })
+        # Remove from active connections
+        device_role = version_info.get("device_role")
+        if device_role in router.micro_ws_by_role:
+            del router.micro_ws_by_role[device_role]
+        if device_role in router.micro_version_by_role:
+            del router.micro_version_by_role[device_role]
+        print(f"{device_role} disconnected from /ws/microcontroller")
     except Exception as e:
         print(f"Error in microcontroller WebSocket: {str(e)}")
-        microcontroller_ws = None
-        memory_settings["microcontroller_connected"] = False
 
 # WebSocket endpoint for clients (users)
 @router.websocket("/ws/client")
