@@ -1,0 +1,201 @@
+// ESP32 Arduino code for Fan Microcontroller (fan_micro)
+// - I2C slave: receives force data from force_micro
+// - WebSocket client: connects to backend, relays force data, receives settings/OTA
+// - OTA update: updates firmware if backend sends updateMicro with .bin URL
+// - Fan PWM control: controls fan based on backend settings
+// - Sends version_info with device_role and firmware_version on connect
+
+#include <WiFi.h>
+#include <WebSocketsClient.h>
+#include <ArduinoJson.h>
+#include <Wire.h>
+#include <HTTPClient.h>
+#include <Update.h>
+
+// --- WiFi credentials ---
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// --- WebSocket server config ---
+const char* ws_host = "backendrailway-production-35ad.up.railway.app";
+const uint16_t ws_port = 8000;
+const char* ws_path = "/ws/microcontroller";
+
+// --- Fan (PWM) config ---
+const int fanPin = 16;  // GPIO16
+const int freq = 25000; // 25 kHz
+const int pwmChannel = 0;
+const int resolution = 8; // 8-bit (0-255)
+
+// --- I2C config ---
+#define FAN_MICRO_I2C_ADDR 0x12  // This device's I2C address
+
+// --- State variables ---
+bool device_on = false;
+int wind_speed = 0;
+long drag_force = 0;
+long down_force = 0;
+
+#define FIRMWARE_VERSION "1.0.0"
+#define DEVICE_ROLE "fan_micro"
+
+WebSocketsClient webSocket;
+
+// --- I2C receive handler ---
+void onI2CReceive(int numBytes) {
+  if (numBytes == 8) { // 2x int32_t
+    uint8_t buf[8];
+    for (int i = 0; i < 8; i++) {
+      buf[i] = Wire.read();
+    }
+    memcpy(&drag_force, buf, 4);
+    memcpy(&down_force, buf + 4, 4);
+    // Optionally print for debug
+    Serial.print("I2C received - Drag: "); Serial.print(drag_force);
+    Serial.print(", Down: "); Serial.println(down_force);
+  } else {
+    // Clear buffer
+    while (Wire.available()) Wire.read();
+  }
+}
+
+// --- WebSocket event handler ---
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+  if (type == WStype_TEXT) {
+    DynamicJsonDocument doc(1024);
+    DeserializationError err = deserializeJson(doc, payload, length);
+    if (err) {
+      Serial.print("JSON parse error: "); Serial.println(err.c_str());
+      return;
+    }
+    if (!doc.containsKey("type")) return;
+    String msgType = doc["type"].as<String>();
+    if (msgType == "settings_update") {
+      if (doc.containsKey("device_on")) {
+        device_on = doc["device_on"];
+        Serial.print("Device ON: "); Serial.println(device_on);
+      }
+      if (doc.containsKey("wind_speed")) {
+        wind_speed = doc["wind_speed"];
+        Serial.print("Wind Speed: "); Serial.println(wind_speed);
+        int duty = wind_speed;
+        ledcWrite(pwmChannel, device_on ? duty : 0);
+      }
+      if (!device_on) {
+        ledcWrite(pwmChannel, 0);
+      }
+    } else if (msgType == "updateMicro") {
+      if (doc.containsKey("ota_url")) {
+        String otaUrl = doc["ota_url"].as<String>();
+        Serial.print("OTA update requested! URL: "); Serial.println(otaUrl);
+        if (otaUrl.length() > 0) {
+          HTTPClient http;
+          http.begin(otaUrl);
+          int httpCode = http.GET();
+          if (httpCode == HTTP_CODE_OK) {
+            int contentLength = http.getSize();
+            WiFiClient * stream = http.getStreamPtr();
+            if (!Update.begin(contentLength)) {
+              Serial.println("Not enough space for OTA");
+              http.end();
+              webSocket.sendTXT("{\"type\":\"ota_ack\",\"status\":\"failed\"}");
+              return;
+            }
+            size_t written = Update.writeStream(*stream);
+            if (written == contentLength) {
+              Serial.println("OTA written successfully");
+            } else {
+              Serial.println("OTA written only partial");
+            }
+            if (Update.end()) {
+              if (Update.isFinished()) {
+                Serial.println("OTA update finished. Rebooting...");
+                webSocket.sendTXT("{\"type\":\"ota_ack\",\"status\":\"success\"}");
+                delay(1000);
+                ESP.restart();
+              } else {
+                Serial.println("OTA update not finished");
+                webSocket.sendTXT("{\"type\":\"ota_ack\",\"status\":\"failed\"}");
+              }
+            } else {
+              Serial.print("OTA update error: ");
+              Serial.println(Update.getError());
+              webSocket.sendTXT("{\"type\":\"ota_ack\",\"status\":\"failed\"}");
+            }
+          } else {
+            Serial.print("HTTP GET failed, code: "); Serial.println(httpCode);
+            webSocket.sendTXT("{\"type\":\"ota_ack\",\"status\":\"failed\"}");
+          }
+          http.end();
+        }
+      }
+    }
+  }
+}
+
+void sendForceData() {
+  // Always send latest force data
+  DynamicJsonDocument doc(256);
+  doc["type"] = "force_data";
+  doc["drag_force"] = drag_force;
+  doc["down_force"] = down_force;
+  String json;
+  serializeJson(doc, json);
+  webSocket.sendTXT(json);
+  Serial.print("Sent drag_force: "); Serial.print(drag_force);
+  Serial.print(", down_force: "); Serial.println(down_force);
+}
+
+void sendVersionInfo() {
+  DynamicJsonDocument doc(128);
+  doc["type"] = "version_info";
+  doc["firmware_version"] = FIRMWARE_VERSION;
+  doc["device_role"] = DEVICE_ROLE;
+  String json;
+  serializeJson(doc, json);
+  webSocket.sendTXT(json);
+  Serial.print("Sent version info: "); Serial.println(json);
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  // WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected!");
+  Serial.print("IP: "); Serial.println(WiFi.localIP());
+
+  // Fan PWM
+  ledcSetup(pwmChannel, freq, resolution);
+  ledcAttachPin(fanPin, pwmChannel);
+  ledcWrite(pwmChannel, 0);
+
+  // I2C as slave
+  Wire.begin(FAN_MICRO_I2C_ADDR);
+  Wire.onReceive(onI2CReceive);
+
+  // WebSocket
+  webSocket.begin(ws_host, ws_port, ws_path);
+  webSocket.onEvent(webSocketEvent);
+  webSocket.setReconnectInterval(5000);
+  delay(1000); // Give time for connection
+  sendVersionInfo();
+}
+
+unsigned long lastSend = 0;
+const unsigned long sendInterval = 500; // ms
+
+void loop() {
+  webSocket.loop();
+  // Send force data periodically
+  unsigned long now = millis();
+  if (now - lastSend > sendInterval) {
+    sendForceData();
+    lastSend = now;
+  }
+}

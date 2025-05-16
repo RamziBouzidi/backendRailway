@@ -1,0 +1,171 @@
+// ESP32 Arduino code for Force Microcontroller (force_micro)
+// - Reads two HX711 load cells
+// - Sends force data to Fan Microcontroller via I2C
+// - Supports OTA update (if connected to backend, optional)
+
+#include <Arduino.h>
+#include <Wire.h>
+#include "HX711.h"
+#include <WiFi.h>
+#include <WebSocketsClient.h>
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <Update.h>
+
+#define FIRMWARE_VERSION "1.0.0"
+#define DEVICE_ROLE "force_micro"
+
+// HX711 Wiring
+const int LOADCELL_DOUT_PIN_1 = 16;
+const int LOADCELL_SCK_PIN_1 = 4;
+const int LOADCELL_DOUT_PIN_2 = 5;
+const int LOADCELL_SCK_PIN_2 = 17;
+HX711 scale1;
+HX711 scale2;
+
+// I2C config
+#define FAN_MICRO_I2C_ADDR 0x12  // Example address for fan microcontroller
+
+// --- WiFi credentials ---
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+// --- WebSocket server config ---
+const char* ws_host = "backendrailway-production-35ad.up.railway.app";
+const uint16_t ws_port = 8000;
+const char* ws_path = "/ws/microcontroller";
+
+WebSocketsClient webSocket;
+
+void sendVersionInfo() {
+  DynamicJsonDocument doc(128);
+  doc["type"] = "version_info";
+  doc["firmware_version"] = FIRMWARE_VERSION;
+  doc["device_role"] = DEVICE_ROLE;
+  String json;
+  serializeJson(doc, json);
+  webSocket.sendTXT(json);
+  Serial.print("Sent version info: "); Serial.println(json);
+}
+
+void sendForceDataWS(long drag, long down) {
+  DynamicJsonDocument doc(256);
+  doc["type"] = "force_data";
+  doc["drag_force"] = drag;
+  doc["down_force"] = down;
+  String json;
+  serializeJson(doc, json);
+  webSocket.sendTXT(json);
+  Serial.print("[WS] Sent drag_force: "); Serial.print(drag);
+  Serial.print(", down_force: "); Serial.println(down);
+}
+
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+  if (type == WStype_TEXT) {
+    DynamicJsonDocument doc(1024);
+    DeserializationError err = deserializeJson(doc, payload, length);
+    if (err) {
+      Serial.print("JSON parse error: "); Serial.println(err.c_str());
+      return;
+    }
+    if (!doc.containsKey("type")) return;
+    String msgType = doc["type"].as<String>();
+    if (msgType == "updateMicro") {
+      if (doc.containsKey("ota_url")) {
+        String otaUrl = doc["ota_url"].as<String>();
+        Serial.print("OTA update requested! URL: "); Serial.println(otaUrl);
+        if (otaUrl.length() > 0) {
+          HTTPClient http;
+          http.begin(otaUrl);
+          int httpCode = http.GET();
+          if (httpCode == HTTP_CODE_OK) {
+            int contentLength = http.getSize();
+            WiFiClient * stream = http.getStreamPtr();
+            if (!Update.begin(contentLength)) {
+              Serial.println("Not enough space for OTA");
+              http.end();
+              webSocket.sendTXT("{\"type\":\"ota_ack\",\"status\":\"failed\"}");
+              return;
+            }
+            size_t written = Update.writeStream(*stream);
+            if (written == contentLength) {
+              Serial.println("OTA written successfully");
+            } else {
+              Serial.println("OTA written only partial");
+            }
+            if (Update.end()) {
+              if (Update.isFinished()) {
+                Serial.println("OTA update finished. Rebooting...");
+                webSocket.sendTXT("{\"type\":\"ota_ack\",\"status\":\"success\"}");
+                delay(1000);
+                ESP.restart();
+              } else {
+                Serial.println("OTA update not finished");
+                webSocket.sendTXT("{\"type\":\"ota_ack\",\"status\":\"failed\"}");
+              }
+            } else {
+              Serial.print("OTA update error: ");
+              Serial.println(Update.getError());
+              webSocket.sendTXT("{\"type\":\"ota_ack\",\"status\":\"failed\"}");
+            }
+          } else {
+            Serial.print("HTTP GET failed, code: "); Serial.println(httpCode);
+            webSocket.sendTXT("{\"type\":\"ota_ack\",\"status\":\"failed\"}");
+          }
+          http.end();
+        }
+      }
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  // WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected!");
+  Serial.print("IP: "); Serial.println(WiFi.localIP());
+  // Initialize HX711
+  scale1.begin(LOADCELL_DOUT_PIN_1, LOADCELL_SCK_PIN_1);
+  scale2.begin(LOADCELL_DOUT_PIN_2, LOADCELL_SCK_PIN_2);
+  scale1.set_gain(128);
+  scale2.set_gain(128);
+  // Initialize I2C as master
+  Wire.begin();
+  // WebSocket
+  webSocket.begin(ws_host, ws_port, ws_path);
+  webSocket.onEvent(webSocketEvent);
+  webSocket.setReconnectInterval(5000);
+  delay(1000); // Give time for connection
+  sendVersionInfo();
+  Serial.println("Force Microcontroller (force_micro) started");
+}
+
+unsigned long lastSend = 0;
+const unsigned long sendInterval = 500; // ms
+
+void loop() {
+  webSocket.loop();
+  unsigned long now = millis();
+  if (now - lastSend > sendInterval) {
+    if (scale1.is_ready() && scale2.is_ready()) {
+      long drag_force = scale1.read();
+      long down_force = scale2.read();
+      // Send force data to fan micro via I2C
+      Wire.beginTransmission(FAN_MICRO_I2C_ADDR);
+      Wire.write((uint8_t*)&drag_force, sizeof(drag_force));
+      Wire.write((uint8_t*)&down_force, sizeof(down_force));
+      Wire.endTransmission();
+      Serial.print("Sent via I2C - Drag: "); Serial.print(drag_force);
+      Serial.print(", Down: "); Serial.println(down_force);
+      // Also send to backend
+      sendForceDataWS(drag_force, down_force);
+    }
+    lastSend = now;
+  }
+}

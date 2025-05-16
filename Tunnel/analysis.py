@@ -248,7 +248,7 @@ def determine_anomaly_type(test, drag_z, down_z, speed_z, physics_violation):
 
 
 # Async version of the anomaly detection function
-async def detect_anomalies_async(model_id: int, db: AsyncSession) -> Dict[str, Any]:
+async def detect_anomalies_async(model_id: int, db: AsyncSession, limit: int = 500 ) -> Dict[str, Any]:
     """
     Detect anomalies in test data for a specific car model (async version)
     
@@ -261,7 +261,10 @@ async def detect_anomalies_async(model_id: int, db: AsyncSession) -> Dict[str, A
     """
     # Get test data using async query
     result = await db.execute(
-        select(models.testCases).filter(models.testCases.Model_id == model_id)
+        select(models.testCases)
+        .filter(models.testCases.Model_id == model_id)
+        .order_by(desc(models.testCases.created_at))
+        .limit(limit)
     )
     tests = result.scalars().all()
     
